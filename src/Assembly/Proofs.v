@@ -33,6 +33,7 @@ Require Import Crypto.Util.Tactics.PrintContext.
 Require Import Crypto.Util.Tactics.PrintGoal.
 Require Import Crypto.Util.Tactics.UniquePose.
 Require Import Crypto.Util.Tactics.DestructHead.
+Require Import Crypto.Util.Tactics.SetEvars.
 Import API.Compilers APINotations.Compilers AbstractInterpretation.ZRange.Compilers.
 Import ListNotations.
 Local Open Scope list_scope.
@@ -59,25 +60,25 @@ Definition eval_var (dag : dag) {t : API.type} : var t -> API.interp_type t -> P
 
 Local Lemma ex_Z_of_N_iff P v
   : (exists n, Z.of_N n = v /\ P n) <-> (0 <= v /\ P (Z.to_N v))%Z.
-Proof.
+Proof using Type.
   split; [ intros [n [H1 H2] ] | intros [H1 H2]; exists (Z.to_N v) ]; subst; rewrite ?N2Z.id, ?Z2N.id by lia.
   all: split; eauto; lia.
 Qed.
 
 Local Lemma ex_Z_of_N_iff' P v (H : (0 <= v)%Z)
   : (exists n, Z.of_N n = v /\ P n) <-> P (Z.to_N v).
-Proof. rewrite ex_Z_of_N_iff; intuition lia. Qed.
+Proof using Type. rewrite ex_Z_of_N_iff; intuition lia. Qed.
 
 Lemma symex_T_app_curried_symex_T_error {t} err v d
   : @symex_T_app_curried t (symex_T_error err) v d = Error err.
-Proof. induction t; cbn in *; break_innermost_match; try reflexivity; eauto. Qed.
+Proof using Type. induction t; cbn in *; break_innermost_match; try reflexivity; eauto. Qed.
 
 Lemma symex_T_app_curried_symex_T_bind_base_split T t v1 v2 v3 d rets d''
       (H : symex_T_app_curried (@symex_T_bind_base T t v1 v2) v3 d = Success (rets, d''))
   : exists rets' d',
     v1 d = Success (rets', d')
     /\ symex_T_app_curried (v2 rets') v3 d' = Success (rets, d'').
-Proof.
+Proof using Type.
   induction t; cbn [symex_T symex_T_bind_base symex_T_app_curried] in *.
   all: cbv [symex_bind ErrorT.bind] in *.
   all: break_innermost_match_hyps; try discriminate; eauto.
@@ -89,7 +90,7 @@ Lemma symex_T_app_curried_symex_T_bind_base_split_err T t v1 v2 v3 d err
     \/ exists rets' d',
       v1 d = Success (rets', d')
       /\ symex_T_app_curried (v2 rets') v3 d' = Error err.
-Proof.
+Proof using Type.
   induction t; cbn [symex_T symex_T_bind_base symex_T_app_curried] in *.
   all: cbv [symex_bind ErrorT.bind] in *.
   all: break_innermost_match_hyps; try discriminate; eauto.
@@ -99,16 +100,89 @@ Qed.
 Lemma lift_eval_base_var_impl d1 d2
       (H : forall v n, eval G d1 v n -> eval G d2 v n)
   : forall t v n, @eval_base_var d1 t v n -> @eval_base_var d2 t v n.
-Proof.
+Proof using Type.
   induction t; cbn [base_var eval_base_var]; break_innermost_match; intros; destruct_head'_ex; destruct_head'_and; subst; eauto using Forall2_weaken.
 Qed.
 Lemma lift_eval_var_impl d1 d2
       (H : forall v n, eval G d1 v n -> eval G d2 v n)
   : forall t v n, @eval_var d1 t v n -> @eval_var d2 t v n.
-Proof.
+Proof using Type.
   induction t; cbn [var eval_var]; eauto using lift_eval_base_var_impl.
 Qed.
 
+(** TODO(Andres): Is this the right place for this lemmas? *)
+Lemma RevealWidth_correct idx d d' v
+      (H : RevealWidth idx d = Success (v, d'))
+      (d_ok : dag_ok G d)
+  : True (* something relating idx to v *)
+    /\ dag_ok G d'
+    /\ (forall e n, eval G d e n -> eval G d' e n).
+Proof using Type.
+  (** TODO(Andres): this proof *)
+Admitted.
+
+(** TODO(Andres): Is this the right place for this lemmas? *)
+Lemma RevealConstant_correct idx d d' v
+      (H : RevealConstant idx d = Success (v, d'))
+      (d_ok : dag_ok G d)
+  : True (* something relating idx to v *)
+    /\ dag_ok G d'
+    /\ (forall e n, eval G d e n -> eval G d' e n).
+Proof using Type.
+  (** TODO(Andres): this proof *)
+Admitted.
+
+(** Makes use of [eval_merge] and [eval_merge_node] lemmas, leaving
+over evars for unknown evaluation values, reading off which [merge]
+and [merge_node] constructs to pose proofs about from the goal and
+hypotheses *)
+Local Ltac saturate_eval_merge_step :=
+  first [ eassumption
+        | let saturate_lem eval_lem mergev do_change do_clear :=
+              (** ensure that we do innermost merge first *)
+              (let e := lazymatch mergev with
+                        | merge_node ?e ?d => e
+                        | merge ?e ?d => e
+                        end in
+               lazymatch e with
+               | context[merge_node] => fail
+               | context[merge] => fail
+               | _ => idtac
+               end);
+              let n := open_constr:(_) in
+              let G := open_constr:(_) in
+              let T := open_constr:(_) in
+              cut T;
+              [ let H := fresh in
+                intro H;
+                let T' := open_constr:(_) in
+                cut T';
+                [ let H' := fresh in
+                  intro H';
+                  let H'' := fresh in
+                  pose proof (eval_lem G n H' H); cbv beta zeta in *;
+                  do_change ();
+                  let k := fresh in
+                  set (k := mergev) in *; clearbody k
+                | do_clear () ]
+              | do_clear () ]
+          in
+          let saturate_of T do_clear :=
+              match T with
+              | context[merge_node (@pair ?A ?B ?op ?args) ?d]
+                => saturate_lem (fun G n H' H => eval_merge_node G d H' op args n H) (merge_node (@pair A B op args) d)
+                                ltac:(fun _ => progress change (op, args) with (@pair A B op args) in * ) do_clear
+              | context[merge ?e ?d]
+                => saturate_lem (fun G n H' H => eval_merge G e n d H' H) (merge e d)
+                                ltac:(fun _ => idtac) do_clear
+              end in
+          match goal with
+          | [ |- ?T ] => saturate_of T ltac:(fun _ => idtac)
+          | [ H : ?T |- _ ] => saturate_of T ltac:(fun _ => clear H)
+          end
+        | progress destruct_head'_and
+        | solve [ eauto 100 ] ].
+Local Ltac saturate_eval_merge := repeat saturate_eval_merge_step.
 Theorem symex_ident_correct
         {t} (idc : ident t)
         (d : dag)
@@ -125,18 +199,14 @@ Theorem symex_ident_correct
   : eval_base_var d' rets (type.app_curried (Compilers.ident_interp idc) input_runtime_var)
     /\ dag_ok G d'
     /\ (forall e n, eval G d e n -> eval G d' e n).
-Proof.
+Proof using Type.
   cbv [symex_ident] in H; break_innermost_match_hyps.
   all: cbn [type.app_curried type.and_for_each_lhs_of_arrow Compilers.ident_interp symex_T_app_curried type.for_each_lhs_of_arrow] in *.
   all: cbn [API.interp_type base_var type.final_codomain var] in *.
   all: destruct_head'_prod; destruct_head'_unit.
   all: cbv [symex_T_error symex_error symex_return symex_bind App ErrorT.bind ident.eagerly ident.literal] in *.
   all: break_innermost_match_hyps.
-  all: match goal with
-       | [ H : Success _ = Success _ |- _ ] => inversion H; clear H
-       | [ H : Error _ = Success _ |- _ ] => exfalso; clear -H; now inversion H
-       | _ => let T := type of H in fail 0 T
-       end.
+  all: first [ inversion_ErrorT_step | let T := type of H in fail 1 T ].
   all: try solve [ repeat first [ progress subst
                                 | progress inversion_prod
                                 | progress cbn [fst snd] in *
@@ -169,32 +239,29 @@ Proof.
                     | rewrite Forall.Forall2_repeat_iff
                     | now apply Forall.Forall2_forall_iff'' ].
   all: rewrite ?ex_Z_of_N_iff'.
-  all: repeat first [ assumption
+  (** Handle things like [RevealWidth] and [RevealConstant] *)
+  all: repeat first [ progress destruct_head'_and
                     | match goal with
-                      | [ |- context[eval _ (ExprRef (fst (merge_node (@pair ?A ?B ?op ?args) ?d))) ?n] ]
-                        => let T := open_constr:(_) in
-                           cut T;
-                           [ let H := fresh in
-                             intro H;
-                             let H' := fresh in
-                             pose proof (eval_merge_node d ltac:(assumption) op args n H) as H'; cbv beta zeta in *;
-                             progress change (op, args) with (@pair A B op args) in H';
-                             let k := fresh in
-                             set (k := merge_node (@pair A B op args) d) in *; clearbody k
-                           | ]
-                      | [ |- context[eval _ (ExprRef (fst (merge ?e ?d))) ?n] ]
-                        => let T := open_constr:(_) in
-                           cut T;
-                           [ let H := fresh in
-                             intro H;
-                             pose proof (eval_merge e n d ltac:(assumption) H);
-                             let k := fresh in
-                             set (k := merge e d) in *; clearbody k
-                           | ]
-                      end
-                    | progress destruct_head'_and
-                    | solve [ auto ]
-                    | repeat apply conj ].
+                      | [ H : RevealWidth _ _ = Success _ |- _ ]
+                        => eapply RevealWidth_correct in H; [ | clear H; try eassumption .. ]
+                      | [ H : RevealConstant _ _ = Success _ |- _ ]
+                        => eapply RevealConstant_correct in H; [ | clear H; try eassumption .. ]
+                      end ].
+  (** Factor out [merge] and [merge_node] *)
+  all: saturate_eval_merge; repeat apply conj; eauto 100; set_evars.
+  (** Ensure that all remaining goals are of the desired form, i.e., that we haven't left over anything *)
+  all: let print_line _ := idtac "=================================" in
+       let print_header _ := print_line () in
+       let print_footer _ := print_context_and_goal (); print_line () in
+       lazymatch goal with
+       | [ H : context[merge] |- _ ] => print_header (); idtac "Warning: Goal involving merge in hypothesis" H "remains; should have been taken care of by saturate_eval_merge"; print_footer (); fail 0 "Remaining merge hyp goal"
+       | [ H : context[merge_node] |- _ ] => print_header (); idtac "Warning: Goal involving merge_node in hypothesis" H "remains; should have been taken care of by saturate_eval_merge"; print_footer (); fail 0 "Remaining merge_node hyp goal"
+       | [ |- context[merge] ] => print_header (); idtac "Warning: Goal involving merge remains; should have been taken care of by saturate_eval_merge"; print_footer (); fail 0 "Remaining merge goal"
+       | [ |- context[merge_node] ] => print_header (); idtac "Warning: Goal involving merge_node remains; should have been taken care of by saturate_eval_merge"; print_footer (); fail 0 "Remaining merge_hyp goal"
+       | [ |- eval _ _ _ _ ] => idtac
+       | [ |- (0 <= _)%Z ] => idtac
+       | [ |- ?G ] => print_header (); idtac "Warning: Unrecognized goal remains:"; print_footer (); fail 0 "Unknown goal:" G
+       end.
   (* misc processing *)
   all: repeat first [ progress cbn [fst snd List.map] in *
                     | progress subst
@@ -209,8 +276,8 @@ Proof.
   all: lazymatch goal with
        | [ |- (0 <= _)%Z ]
          => rewrite <- ?Z.mul_split_high, ?Z.mul_split_div, ?Z.mul_split_mod,
-            ?Z.add_get_carry_full_div, ?Z.add_get_carry_full_mod, ?Z.add_with_get_carry_full_div, ?Z.add_with_get_carry_full_mod;
-              cbv [Z.add_with_carry];
+            ?Z.add_get_carry_full_div, ?Z.add_get_carry_full_mod, ?Z.add_with_get_carry_full_div, ?Z.add_with_get_carry_full_mod, <- ?Z.sub_get_borrow_full_div, ?Z.sub_get_borrow_full_mod, ?Z.sub_with_get_borrow_full_div, ?Z.sub_with_get_borrow_full_mod;
+              cbv [Z.add_with_carry Z.sub_with_borrow];
               lazymatch goal with
               | [ |- (0 <= ?x mod ?y)%Z ]
                 => let H := fresh in
@@ -258,7 +325,7 @@ Theorem symex_expr_correct
   : eval_base_var d' rets (type.app_curried (API.interp expr2) input_runtime_var)
     /\ dag_ok G d'
     /\ (forall e n, eval G d e n -> eval G d' e n).
-Proof.
+Proof using Type.
   revert dependent d; revert dependent d'; revert dependent input_var_data; revert dependent input_runtime_var.
   induction Hwf; intros; cbn [symex_expr] in *.
   all: repeat first [ match goal with
@@ -334,7 +401,7 @@ Qed.
 Lemma symex_expr_App_curried {t} (e : API.expr t) input_var_data d
   : symex_expr (invert_expr.App_curried e (type.map_for_each_lhs_of_arrow (fun t v => ($v)%expr) input_var_data)) d
     = symex_T_app_curried (symex_expr e) input_var_data d.
-Proof.
+Proof using Type.
   induction t; cbn [invert_expr.App_curried symex_T_app_curried type.map_for_each_lhs_of_arrow];
     destruct_head_hnf' prod; destruct_head_hnf' unit; cbn [fst snd]; try reflexivity.
   match goal with H : _ |- _ => rewrite H; clear H end.
@@ -351,7 +418,7 @@ Qed.
 Lemma symex_expr_smart_App_curried {t} (e : API.expr t) input_var_data d
   : symex_expr (invert_expr.smart_App_curried e input_var_data) d
     = symex_T_app_curried (symex_expr e) input_var_data d.
-Proof.
+Proof using Type.
   induction e; cbn [invert_expr.smart_App_curried];
     rewrite ?symex_expr_App_curried; try reflexivity.
   match goal with H : _ |- _ => rewrite H; clear H end.
@@ -371,7 +438,7 @@ Theorem symex_PHOAS_PHOAS_correct
   : eval_base_var d' rets (type.app_curried (API.Interp expr) input_runtime_var)
     /\ dag_ok G d'
     /\ (forall e n, eval G d e n -> eval G d' e n).
-Proof.
+Proof using Type.
   cbv [symex_PHOAS_PHOAS] in H.
   rewrite symex_expr_smart_App_curried in H.
   eapply symex_expr_correct with (GG:=[]); try eassumption; cbn [List.In]; try eapply Hwf; try now intros; exfalso.
@@ -390,7 +457,7 @@ Definition eval_idx_or_list_idx (d : dag) (v1 : idx + list idx) (v2 : Z + list Z
 Lemma lift_eval_idx_Z_impl d1 d2
       (H : forall v n, eval G d1 v n -> eval G d2 v n)
   : forall v n, eval_idx_Z d1 v n -> eval_idx_Z d2 v n.
-Proof.
+Proof using Type.
   cbv [eval_idx_Z]; intros; destruct_head'_ex; destruct_head'_and; eexists; split; [ eassumption | ].
   eauto.
 Qed.
@@ -398,7 +465,7 @@ Qed.
 Lemma lift_eval_idx_or_list_idx_impl d1 d2
       (H : forall v n, eval G d1 v n -> eval G d2 v n)
   : forall v n, eval_idx_or_list_idx d1 v n -> eval_idx_or_list_idx d2 v n.
-Proof.
+Proof using Type.
   cbv [eval_idx_or_list_idx]; intros; break_innermost_match; eauto using lift_eval_idx_Z_impl, Forall2_weaken.
 Qed.
 
@@ -451,7 +518,7 @@ Fixpoint simplify_base_runtime {t : base.type} : base.interp t -> option (list (
      | base.type.type_base base.type.Z => fun val => Some [inl val]
      | base.type.prod A B => fun ab => (a <- simplify_base_runtime (fst ab); b <- simplify_base_runtime (snd ab); Some (a ++ b))
      | base.type.list (base.type.type_base base.type.Z)
-       => fun ls : list Z => Some (List.map inl ls)
+       => fun ls : list Z => Some [inr ls]
      | base.type.list _
      | base.type.type_base _
      | base.type.option _
@@ -470,7 +537,7 @@ Lemma build_base_var_runtime_gen
     | Success _, None | Error _, Some _ => False
     | Error _, None => True
     end.
-Proof.
+Proof using Type.
   revert inputs runtime_inputs Hinputs; induction t; cbn [build_base_var build_base_runtime]; intros; break_innermost_match.
   all: repeat first [ exact I
                     | progress subst
@@ -507,7 +574,7 @@ Lemma build_var_runtime_gen
     | Success _, None | Error _, Some _ => False
     | Error _, None => True
     end.
-Proof.
+Proof using Type.
   destruct t as [t|s d']; [ pose proof (build_base_var_runtime_gen _ _ _ Hinputs t) | ].
   all: cbv [build_var build_runtime]; break_innermost_match; try assumption; try exact I.
 Qed.
@@ -524,7 +591,7 @@ Lemma build_input_var_runtime_gen
     | Success _, None | Error _, Some _ => False
     | Error _, None => True
     end.
-Proof.
+Proof using Type.
   revert inputs runtime_inputs Hinputs; induction t as [|s _ d' IHd];
     cbn [build_input_runtime build_input_var build_var type.and_for_each_lhs_of_arrow] in *; intros; auto; [].
   cbv [Crypto.Util.Option.bind Rewriter.Util.Option.bind ErrorT.bind].
@@ -544,7 +611,7 @@ Lemma simplify_base_var_runtime_gen {t} d b v
     | Success _, None | Error _, Some _ => False
     | Error _, None => True
     end.
-Proof.
+Proof using Type.
   induction t; cbn [eval_base_var simplify_base_var simplify_base_runtime] in *; break_innermost_match.
   all: repeat first [ assumption
                     | exact I
@@ -562,7 +629,7 @@ Proof.
                     | progress break_innermost_match_hyps
                     | rewrite Forall.Forall2_map_map_iff
                     | solve [ eauto using Forall2_app ] ].
-Admitted. (* note: Andres broke this when adding [G] to [eval] and does not know how fix *)
+Qed.
 
 Theorem symex_PHOAS_correct
         {t} (expr : API.Expr t)
@@ -581,7 +648,7 @@ Theorem symex_PHOAS_correct
         /\ List.Forall2 (eval_idx_or_list_idx d') rets runtime_rets)
     /\ dag_ok G d'
     /\ (forall e n, eval G d e n -> eval G d' e n).
-Proof.
+Proof using Type.
   cbv [symex_PHOAS ErrorT.bind] in H; break_innermost_match_hyps; try discriminate.
   destruct (build_input_runtime t runtime_inputs) as [ [input_runtime_var [|] ] | ] eqn:H'; [ | exfalso.. ].
   all: lazymatch goal with
@@ -710,7 +777,7 @@ Lemma build_base_runtime_ok t arg_bounds args types PHOAS_args extra
     args = args' ++ extra
     /\ (forall extra', build_base_runtime t (args' ++ extra') = Some (PHOAS_args, extra'))
     /\ Forall2 val_or_list_val_matches_spec args' types.
-Proof.
+Proof using Type.
   revert args extra types H Hargs HPHOAS_args; induction t; intros;
     cbn [simplify_base_type build_base_runtime type.for_each_lhs_of_arrow Language.Compilers.base.interp] in *;
     break_innermost_match_hyps;
@@ -726,7 +793,7 @@ Lemma build_runtime_ok t arg_bounds args types PHOAS_args extra
     args = args' ++ extra
     /\ (forall extra', build_runtime t (args' ++ extra') = Some (PHOAS_args, extra'))
     /\ Forall2 val_or_list_val_matches_spec args' types.
-Proof.
+Proof using Type.
   revert args extra types H Hargs HPHOAS_args; induction t; intros;
     cbn [simplify_type build_runtime type.for_each_lhs_of_arrow] in *;
     [ eapply build_base_runtime_ok; eassumption | discriminate ].
@@ -740,7 +807,7 @@ Lemma build_input_runtime_ok t arg_bounds args input_types PHOAS_args extra
     args = args' ++ extra
     /\ (forall extra', build_input_runtime t (args' ++ extra') = Some (PHOAS_args, extra'))
     /\ Forall2 val_or_list_val_matches_spec args' input_types.
-Proof.
+Proof using Type.
   revert args extra input_types H Hargs HPHOAS_args; induction t as [|t1 ? t2]; intros;
     [ eexists [] | pose proof (build_runtime_ok t1) ];
     cbn [simplify_input_type build_input_runtime type.for_each_lhs_of_arrow] in *;
@@ -753,7 +820,7 @@ Lemma build_input_runtime_ok_nil t arg_bounds args input_types PHOAS_args
       (Hargs : build_input_runtime t args = Some (PHOAS_args, []))
       (HPHOAS_args : type.andb_bool_for_each_lhs_of_arrow (@ZRange.type.option.is_bounded_by) arg_bounds PHOAS_args = true)
   : Forall2 val_or_list_val_matches_spec args input_types.
-Proof.
+Proof using Type.
   pose proof (build_input_runtime_ok t arg_bounds args input_types PHOAS_args [] H Hargs HPHOAS_args).
   destruct_head'_ex; destruct_head'_and; subst; rewrite app_nil_r; assumption.
 Qed.
@@ -771,7 +838,7 @@ Proof.
 Admitted.
 
 Lemma empty_dag_ok : dag_ok G empty_dag.
-Proof.
+Proof using Type.
   econstructor. setoid_rewrite ListUtil.nth_error_nil_error in H. inversion H.
   Unshelve.
   exact N0.
@@ -800,7 +867,7 @@ Theorem check_equivalence_correct
     DenoteLines st asm = Some st'
     /\ simplify_base_runtime (type.app_curried (API.Interp expr) PHOAS_args) = Some retvals
     /\ True (* TODO(andres): write down something that relates st' to retvals *).
-Proof.
+Proof using G.
   cbv beta delta [check_equivalence ErrorT.bind] in H.
   repeat match type of H with
          | (let n := ?v in _) = _
@@ -885,7 +952,7 @@ Theorem generate_assembly_of_hinted_expr_correct
         DenoteLines st asm = Some st'
         /\ simplify_base_runtime (type.app_curried (API.Interp expr) PHOAS_args) = Some retvals
         /\ True (* TODO(andres): write down something that relates st' to retvals *).
-Proof.
+Proof using G.
   cbv [generate_assembly_of_hinted_expr] in H.
   break_innermost_match_hyps; inversion H; subst; destruct_head'_and; split; [ reflexivity | intros ].
   eapply check_equivalence_correct; eassumption.

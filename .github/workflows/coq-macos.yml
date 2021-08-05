@@ -16,10 +16,13 @@ jobs:
       COQ_VERSION: "8.13.1"
 
     steps:
-    - name: Set up OCaml
-      uses: avsm/setup-ocaml@v1.1.10
+    - uses: actions/checkout@v2
       with:
-        ocaml-version: 4.11.1
+        submodules: recursive
+    - name: Set up OCaml
+      uses: ocaml/setup-ocaml@v2
+      with:
+        ocaml-compiler: 4.11.1
 
     - name: Install system dependencies
       run: |
@@ -70,9 +73,6 @@ jobs:
         echo "::group::true | coqtop"
         true | coqtop
         echo "::endgroup::"
-    - uses: actions/checkout@v2
-    - name: submodules-init
-      uses: snickerbockers/submodules-init@v4
     - name: deps
       run: |
         eval $(opam env)
