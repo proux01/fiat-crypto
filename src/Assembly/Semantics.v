@@ -225,7 +225,7 @@ Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstructi
     st <- SetOperand sa s st b va;
     SetOperand sa s st a vb
   | (setc | seto) as opc, [dst] => (* Flags Affected: None *)
-    let flag := match opc with adcx => CF | _ => OF end in
+    let flag := match opc with setc => CF | _ => OF end in
     b <- get_flag st flag;
     SetOperand sa s st dst (N.b2n b)
   | clc, [] => Some (update_flag_with st (fun fs =>
@@ -309,21 +309,21 @@ Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstructi
     cnt <- DenoteOperand sa s st cnt;
     let v := Z.to_N (Z.land (Z.shiftr v1 (N.land cnt (s-1))) (Z.ones s)) in
     st <- SetOperand sa s st dst v;
-    if cnt =? 0 then Some st else
+    Some (if cnt =? 0 then st else
       let st := HavocFlagsFromResult s st v in
       let st := if cnt =? 1 then SetFlag st OF false else st in
       let st := if cnt <? s then SetFlag st CF (N.testbit v1 (cnt-1)) else st in
-      Some (HavocFlag st AF)
+      HavocFlag st AF)
   | shr, [dst; cnt] =>
     v1 <- DenoteOperand sa s st dst;
     cnt <- DenoteOperand sa s st cnt;
     let v := N.shiftr v1 (N.land cnt (s-1)) in
     st <- SetOperand sa s st dst v;
-    if cnt =? 0 then Some st else
+    Some (if cnt =? 0 then st else
       let st := HavocFlagsFromResult s st v in
       let st := if cnt =? 1 then SetFlag st OF (N.testbit v1 (s-1)) else st in
       let st := if cnt <? s then SetFlag st CF (N.testbit v1 (cnt-1)) else st in
-      Some (HavocFlag st AF)
+      HavocFlag st AF)
   | rcr, [dst; cnt] =>
     v1 <- DenoteOperand sa s st dst;
     cnt <- DenoteOperand sa s st cnt;
