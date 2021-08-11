@@ -177,7 +177,7 @@ else:
          List.map Z.to_nat (starts ++ chain2 ++ chain3)
        else (List.seq 0 n ++ [0; 1])%list%nat.
 
-  Definition default_tight_upperbound_fraction : Q := 1%Q.
+  Definition default_tight_upperbound_fraction : Q := 1.000001%Q.
   Definition coef := 2. (* for balance in sub *)
   Definition prime_upperbound_list : list Z
     := Partition.partition weight n (2 ^ Z.log2_up (s - Associational.eval c) - 1).

@@ -561,6 +561,8 @@ Module Compilers.
             all: ident.fancy.cbv_fancy_in_all; cbn [ZRange.type.base.option.is_bounded_by ZRange.type.base.is_bounded_by Crypto.Util.Option.bind ZRange.ident.option.to_literal fst snd] in *.
             all: break_innermost_match; try reflexivity.
             Time all: try solve [ non_arith_t ].
+            8: eapply (ZRange.is_bounded_by_of_is_tighter_than (z0>>z)); [
+                 reflect_beq_to_eq zrange_beq; rewrite Heqb; exact eq_refl|]. (* kludge to avoid uint1 after >> *)
             all: repeat first [ progress subst
                               | progress inversion_prod
                               | progress inversion_option

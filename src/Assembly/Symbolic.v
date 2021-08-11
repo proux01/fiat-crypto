@@ -14,15 +14,14 @@ Module Import List.
           if f a then Some 0
           else option_map S (indexof l )
       end.
-    Lemma indexof_none l (H : indexof l = None) :
-      forall i a, nth_error l i = Some a -> f a = false.
-    Admitted.
     Lemma indexof_Some l i (H : indexof l = Some i) :
       exists a, nth_error l i = Some a /\ f a = true.
-    Admitted.
-    Lemma indexof_first l i (H : indexof l = Some i) :
-      forall j a, j < i -> nth_error l j = Some a -> f a = false.
-    Admitted.
+    Proof.
+      revert dependent i; induction l; cbn in *; try congruence; [].
+      destruct (f a) eqn:?; cbn.
+      { inversion 1; subst. eexists. split. exact eq_refl. eassumption. }
+      { cbv [option_map]; destruct (indexof l) eqn:?; inversion 1; subst; eauto. }
+    Qed.
   End IndexOf.
 
 
@@ -105,7 +104,7 @@ End Forall2.
 Require Import Coq.Strings.String Crypto.Util.Strings.Show.
 Require Import Crypto.Assembly.Syntax.
 Definition idx := N.
-Local Set Boolean Equality Schemes.
+Local Set Decidable Equality Schemes.
 Definition symbol := N.
 
 Class OperationSize := operation_size : N.
@@ -113,8 +112,9 @@ Global Instance Show_OperationSize : Show OperationSize := show_N.
 
 Section S.
 Implicit Type s : OperationSize.
-Variant op := old s (_:symbol) | const (_ : Z) | add s | addcarry s | notaddcarry s | addoverflow s | neg s | shl s | shr s | sar s | rcr s | and s | or s | xor s | slice (lo sz : N) | mul s | set_slice (lo sz : N) | selectznz | iszero (* | ... *)
-  | addZ | mulZ | negZ | shlZ | shrZ | andZ | orZ | addcarryZ s.
+Variant op := old s (_:symbol) | const (_ : Z) | add s | addcarry s | subborrow s | addoverflow s | neg s | shl s | shr s | sar s | rcr s | and s | or s | xor s | slice (lo sz : N) | mul s | set_slice (lo sz : N) | selectznz | iszero (* | ... *)
+  | addZ | mulZ | negZ | shlZ | shrZ | andZ | orZ | addcarryZ s | subborrowZ s.
+Definition op_beq a b := if op_eq_dec a b then true else false.
 End S.
 
 Global Instance Show_op : Show op := fun o =>
@@ -123,7 +123,7 @@ Global Instance Show_op : Show op := fun o =>
   | const n => "const " ++ show n
   | add s => "add " ++ show s
   | addcarry s => "addcarry " ++ show s
-  | notaddcarry s => "notaddcarry " ++ show s
+  | subborrow s => "subborrow " ++ show s
   | addoverflow s => "addoverflow " ++ show s
   | neg s => "neg " ++ show s
   | shl s => "shl " ++ show s
@@ -146,11 +146,12 @@ Global Instance Show_op : Show op := fun o =>
   | andZ => "andZ"
   | orZ => "orZ"
   | addcarryZ s => "addcarryZ " ++ show s
+  | subborrowZ s => "subborrowZ " ++ show s
   end%string.
 
 Definition associative o := match o with add _|mul _|mulZ|or _|and _=> true | _ => false end.
-Definition commutative o := match o with add _|addcarry _|notaddcarry _|addoverflow _|mul _|mulZ => true | _ => false end.
-Definition identity o := match o with add _|addcarry _|notaddcarry _|addoverflow _ => Some 0%Z | mul _|mulZ=>Some 1%Z | and s => Some (Z.ones (Z.of_N s)) |_=> None end.
+Definition commutative o := match o with add _|addcarry _|addoverflow _|mul _|mulZ => true | _ => false end.
+Definition identity o := match o with add _|addcarry _|addoverflow _|subborrow _ => Some 0%Z | mul _|mulZ=>Some 1%Z | and s => Some (Z.ones (Z.of_N s)) |_=> None end.
 
 Definition node (A : Set) : Set := op * list A.
 Global Instance Show_node {A : Set} [show_A : Show A] : Show (node A) := show_prod.
@@ -183,6 +184,29 @@ Definition Show_expr : Show expr
       fix Show_expr e := Show_expr_body Show_expr e.
 Global Existing Instance Show_expr.
 
+Lemma op_beq_spec a b : BoolSpec (a=b) (a<>b) (op_beq a b).
+Proof. cbv [op_beq]; destruct (op_eq_dec a b); constructor; congruence. Qed.
+Fixpoint expr_beq (X Y : expr) {struct X} : bool :=
+  match X, Y with
+  | ExprRef x, ExprRef x0 => N.eqb x x0
+  | ExprApp x, ExprApp x0 =>
+      Prod.prod_beq _ _ op_beq (ListUtil.list_beq expr expr_beq) x x0
+  | _, _ => false
+  end.
+Lemma expr_beq_spec a b : BoolSpec (a=b) (a<>b) (expr_beq a b).
+Proof.
+  revert b; induction a, b; cbn.
+  1: destruct (N.eqb_spec i i0); constructor; congruence.
+  1,2: constructor; congruence.
+  destruct n, n0; cbn.
+  destruct (op_beq_spec o o0); cbn in *; [subst|constructor; congruence].
+  revert l0; induction H, l0; cbn; try (constructor; congruence); [].
+  destruct (H e); cbn; try (constructor; congruence); []; subst.
+  destruct (IHForall l0); [left|right]; congruence.
+Qed.
+Lemma expr_beq_true a b : expr_beq a b = true -> a = b.
+Proof. destruct (expr_beq_spec a b); congruence. Qed.
+
 Require Import Crypto.Util.Option Crypto.Util.Notations Coq.Lists.List.
 Import ListNotations.
 
@@ -196,12 +220,10 @@ Section WithContext.
     | old s x, nil => match ctx x with Some v => Some (keep s v) | None => None end
     | const z, nil => Some z
     | add s, args => Some (keep s (List.fold_right Z.add 0 args))
-    | addcarry s, args => Some (
-        let v := List.fold_right Z.add 0 args in
-        if Z.eqb v (keep s v) then 0 else 1)
-    | notaddcarry s, args => Some (
-        let v := List.fold_right Z.add 0 args in
-        if Z.eqb v (keep s v) then 1 else 0)
+    | addcarry s, args =>
+        Some (Z.shiftr (List.fold_right Z.add 0 args) (Z.of_N s) mod 2)
+    | subborrow s, cons a args' =>
+        Some ((- Z.shiftr (a - List.fold_right Z.add 0 args') (Z.of_N s)) mod 2)
     | addoverflow s, args => Some (
         let v := List.fold_right Z.add 0%Z (List.map (signed s) args) in
         if Z.eqb v (signed s v) then 0 else 1)
@@ -231,6 +253,7 @@ Section WithContext.
     | andZ, args => Some (List.fold_right Z.land (-1) args)
     | orZ, args => Some (List.fold_right Z.lor 0 args)
     | addcarryZ s, args => Some (Z.shiftr (List.fold_right Z.add 0 args) (Z.of_N s))
+    | subborrowZ s, cons a args' => Some (- Z.shiftr (a - List.fold_right Z.add 0 args') (Z.of_N s))
     | _, _ => None
     end%Z.
 End WithContext.
@@ -387,7 +410,7 @@ Section WithDag.
     exists (max n n').
     cbn [map]; f_equal.
     (* fuel weakening *)
-  Admitted.
+  Abort.
 
   Lemma reveals_reveal_repr : forall n i e', reveal n i = e' ->
     forall e, repr i e -> reveals e' e.
@@ -439,7 +462,11 @@ Fixpoint merge (e : expr) (d : dag) : idx * dag :=
   end.
 
 Lemma node_beq_sound e x : node_beq N.eqb e x = true -> e = x.
-Admitted.
+Proof.
+  eapply Prod.internal_prod_dec_bl.
+  { intros X Y; destruct (op_beq_spec X Y); congruence. }
+  { intros X Y. eapply ListUtil.internal_list_dec_bl, N.eqb_eq. }
+Qed.
 
 Lemma eval_weaken G d x e n : eval G d e n -> eval G (d ++ [x]) e n.
 Proof.
@@ -653,7 +680,7 @@ Fixpoint bound_expr e : option Z := (* e <= r *)
       | _ => None
       end
   | ExprApp ((old s _ | slice _ s | mul s | shl s | shr s | sar s | neg s | and s | or s | xor s), _) => Some (Z.ones (Z.of_N s))
-  | ExprApp ((addcarry _ | notaddcarry _ | addoverflow _ | iszero), _) => Some 1%Z
+  | ExprApp ((addcarry _ | subborrow _ | addoverflow _ | iszero), _) => Some 1%Z
   | _ => None
   end.
 
@@ -713,7 +740,7 @@ Ltac step := match goal with
   | H : andb _ _ = true |- _ => eapply Bool.andb_prop in H; case H as (?&?)
   | H : N.eqb ?n _ = true |- _ => eapply N.eqb_eq in H; try subst n
   | H : Z.eqb ?n _ = true |- _ => eapply Z.eqb_eq in H; try subst n
-  | H : expr_beq ?a ?b = true |- _ => replace a with b in * by admit; clear H
+  | H : expr_beq ?a ?b = true |- _ => replace a with b in * by (symmetry;exact (expr_beq_true a b H)); clear H
   | _ => progress destruct_one_match_hyp
   | _ => progress destruct_one_match
 
@@ -747,7 +774,15 @@ Definition slice01_addcarryZ :=
         ExprApp (addcarry s, args)
       | _ => e end.
 Global Instance slice01_addcarryZ_ok : Ok slice01_addcarryZ.
-Proof. t; f_equal. Admitted.
+Proof. t; rewrite ?Z.shiftr_0_r, ?Z.land_ones, ?Z.shiftr_div_pow2; trivial; Lia.lia. Qed.
+
+Definition slice01_subborrowZ :=
+  fun e => match e with
+    ExprApp (slice 0 1, [(ExprApp (subborrowZ s, args))]) =>
+        ExprApp (subborrow s, args)
+      | _ => e end.
+Global Instance slice01_subborrowZ_ok : Ok slice01_subborrowZ.
+Proof. t; rewrite ?Z.shiftr_0_r, ?Z.land_ones, ?Z.shiftr_div_pow2; trivial; Lia.lia. Qed.
 
 Definition slice_set_slice :=
   fun e => match e with
@@ -929,21 +964,14 @@ Definition xor_same :=
 Global Instance xor_same_ok : Ok xor_same.
 Proof.
   t; cbn [fold_right]. rewrite Z.lxor_0_r, Z.lxor_nilpotent; trivial.
-Admitted.
-
-Definition UNSOUND_widen_shr :=
-  fun e => match e with
-    | ExprApp (shr 1,args) => ExprApp (shr 64, args)
-    | ExprApp (slice 0 1,[ExprApp(shr 64, args)]) => ExprApp (shr 64, args)
-    | _ => e end%N.
-Global Instance UNSOUND_widen_shr_ok : Ok UNSOUND_widen_shr. Proof. t.
-Admitted.
+Qed.
 
 Definition expr : expr -> expr :=
   List.fold_left (fun e f => f e)
   [constprop
   ;slice0
   ;slice01_addcarryZ
+  ;slice01_subborrowZ
   ;set_slice_set_slice
   ;slice_set_slice
   ;truncate_small
@@ -956,7 +984,6 @@ Definition expr : expr -> expr :=
   ;addoverflow_small
   ;addbyte_small
   ;xor_same 
-  ;UNSOUND_widen_shr 
   ].
 
 Lemma eval_expr c d e v : eval c d e v -> eval c d (expr e) v.
@@ -1282,16 +1309,16 @@ Definition SymexNormalInstruction (instr : NormalInstruction) : M unit :=
     _ <- SetOperand dst v;
     SetFlag f c
   | Syntax.sub, [dst; src] =>
-    v <- Symeval (add         s@(dst, PreApp (neg s) [PreARG src]));
-    c <- Symeval (notaddcarry s@(dst, PreApp (neg s) [PreARG src]));
-    _ <- HavocFlags;
+    v <- Symeval (add       s@(dst, PreApp (neg s) [PreARG src]));
+    c <- Symeval (subborrow s@(dst, src));
     _ <- SetOperand dst v;
+    _ <- HavocFlags;
     SetFlag CF c
   | Syntax.sbb, [dst; src] =>
     v <- Symeval (add         s@(dst, PreApp (neg s) [PreARG src], PreApp (neg s) [PreFLG CF]));
-    c <- Symeval (notaddcarry s@(dst, PreApp (neg s) [PreARG src], PreApp (neg s) [PreFLG CF]));
-    _ <- HavocFlags;
+    c <- Symeval (subborrow s@(dst, src, CF));
     _ <- SetOperand dst v;
+    _ <- HavocFlags;
     SetFlag CF c
   | lea, [dst; mem src] =>
     a <- Address src;
