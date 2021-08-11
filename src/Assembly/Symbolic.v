@@ -848,7 +848,7 @@ Definition addbyte_small :=
           then ExprApp (add 64%N, args)
           else e | _ => e end | _ =>  e end.
 Global Instance addbyte_small_ok : Ok addbyte_small.
-Proof. t. Admitted.
+Proof. t; f_equal. (* Is l0 == args'? then apply le_ones*) Admitted.
 
 Definition addcarry_small :=
   fun e => match e with
@@ -859,7 +859,7 @@ Definition addcarry_small :=
           then (ExprApp (const 0, nil))
           else e | _ => e end | _ =>  e end.
 Global Instance addcarry_small_ok : Ok addcarry_small.
-Proof. t. exfalso; eapply E1; clear E1. Admitted.
+Proof. t. exfalso; eapply E1; clear E1. (* Is l0 == args'? Then apply le_ones*) Admitted.
 
 Definition addoverflow_small :=
   fun e => match e with
@@ -872,12 +872,6 @@ Definition addoverflow_small :=
 Global Instance addoverflow_small_ok : Ok addoverflow_small.
 Proof. t. exfalso; eapply E1; clear E1. Admitted.
 
-Definition rcr :=
-  fun e => match e with
-        | ExprApp (rcr s, [x; ExprApp (addcarry _, _); ExprApp (const 1, nil)]) => ExprApp (mul s, [x;  ExprApp (const 64, nil)]) (*not sure about this mul s*)   
-        | _ => e end.
-Global Instance rcr_ok : Ok rcr.
-Proof. t. Admitted.
 
 Definition constprop :=
   fun e => match interp0_expr e with
@@ -942,7 +936,7 @@ Definition UNSOUND_widen_shr :=
     | ExprApp (shr 1,args) => ExprApp (shr 64, args)
     | ExprApp (slice 0 1,[ExprApp(shr 64, args)]) => ExprApp (shr 64, args)
     | _ => e end%N.
-Global Instance UNSOUND_widen_shr_ok : Ok UNSOUND_widen_shr.
+Global Instance UNSOUND_widen_shr_ok : Ok UNSOUND_widen_shr. Proof. t.
 Admitted.
 
 Definition expr : expr -> expr :=
@@ -952,7 +946,6 @@ Definition expr : expr -> expr :=
   ;slice01_addcarryZ
   ;set_slice_set_slice
   ;slice_set_slice
-  ;rcr
   ;truncate_small
   ;flatten_associative
   ;consts_commutative
