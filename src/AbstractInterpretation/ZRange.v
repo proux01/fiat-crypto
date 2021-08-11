@@ -713,9 +713,11 @@ Module Compilers.
              | ident.Z_sub as idc
                => fun x y => x <- x; y <- y; Some (ZRange.four_corners (ident.interp idc) x y)
              | ident.Z_div as idc
-             | ident.Z_shiftr as idc
              | ident.Z_shiftl as idc
                => fun x y => x <- x; y <- y; Some (ZRange.four_corners_and_zero (ident.interp idc) x y)
+             | ident.Z_shiftr as idc
+               => fun x y => x <- x; y <- y; Some (let r := ZRange.four_corners_and_zero (ident.interp idc) x y in
+                                                   if zrange_beq r r[0~>1] then r[0~>2] else r) (* kludge to avoid uint1 after >> *)
              | ident.Z_add_with_carry as idc
                => fun x y z => x <- x; y <- y; z <- z; Some (ZRange.eight_corners (ident.interp idc) x y z)
              | ident.Z_cc_m as idc
